@@ -101,8 +101,11 @@ def main():
     paused = False
     speed = 1.0
     sim_accum = 0.0
+    step_mode = False
+    do_step = False
     renderer.paused = paused
     renderer.speed = speed
+    renderer.step_mode = step_mode
     while renderer.running:
         mx, my = pygame.mouse.get_pos()
         for b in renderer.menu_buttons:
@@ -130,6 +133,11 @@ def main():
                     elif event.key == pygame.K_RIGHT:
                         speed = min(3.0, speed + 0.25)
                         renderer.speed = speed
+                    elif event.key == pygame.K_t:
+                        step_mode = not step_mode
+                        renderer.step_mode = step_mode
+                    elif event.key == pygame.K_n:
+                        do_step = True
                 elif state_view == 'GAMEOVER':
                     if event.key == pygame.K_r:
                         loop = SimulationLoop(TwoPhasePolicy(), renderer)
@@ -181,22 +189,35 @@ def main():
                     elif r.get('speed_plus') and r['speed_plus'].collidepoint(event.pos):
                         speed = min(3.0, speed + 0.25)
                         renderer.speed = speed
+                    elif r.get('step_mode') and r['step_mode'].collidepoint(event.pos):
+                        step_mode = not step_mode
+                        renderer.step_mode = step_mode
+                    elif r.get('step_once') and r['step_once'].collidepoint(event.pos):
+                        do_step = True
         if state_view == 'MENU':
             draw_menu(renderer)
         elif state_view == 'RUNNING':
-            if paused:
-                renderer.render(loop.state, loop.state.tick)
-                cont = True
-            else:
-                sim_accum += speed
-                steps = int(sim_accum)
-                steps = max(1, min(steps, 5))
-                cont = True
-                for _ in range(steps):
+            if step_mode:
+                if do_step:
                     cont = loop.step(print_every=1)
-                    sim_accum -= 1
-                    if not cont:
-                        break
+                    do_step = False
+                else:
+                    renderer.render(loop.state, loop.state.tick)
+                    cont = True
+            else:
+                if paused:
+                    renderer.render(loop.state, loop.state.tick)
+                    cont = True
+                else:
+                    sim_accum += speed
+                    steps = int(sim_accum)
+                    steps = max(1, min(steps, 5))
+                    cont = True
+                    for _ in range(steps):
+                        cont = loop.step(print_every=1)
+                        sim_accum -= 1
+                        if not cont:
+                            break
             for side in ['A','B']:
                 cur = loop.state.known_enemy_base.get(side)
                 if last_known.get(side) is None and cur is not None:

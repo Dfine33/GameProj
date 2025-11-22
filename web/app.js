@@ -37,10 +37,27 @@ const View = {
   draw(state) {
     const ctx = this.ctx;
     ctx.clearRect(0,0,this.canvas.width,this.canvas.height);
-    const w = state.map.width;
-    const h = state.map.height;
-    const cw = Math.floor(this.canvas.width / w);
-    const ch = Math.floor(this.canvas.height / h);
+    const w = state.map.width; const h = state.map.height;
+    const padLeft = 24, padRight = 24, padTop = 48, padBottom = 24;
+    const usableW = Math.max(1, this.canvas.width - padLeft - padRight);
+    const usableH = Math.max(1, this.canvas.height - padTop - padBottom);
+    const size = Math.min(usableW / (Math.sqrt(3) * (w + 0.5)), usableH / (1.5 * h));
+    const uiTop = padTop;
+    function hexCenter(x,y){
+      const cx = padLeft + size * Math.sqrt(3) * (x + 0.5 * (y & 1));
+      const cy = uiTop + size * 1.5 * y;
+      return [cx, cy];
+    }
+    function hexPath(cx, cy){
+      ctx.beginPath();
+      for (let i=0;i<6;i++){
+        const ang = (60*i + 30) * Math.PI / 180;
+        const px = cx + size * Math.cos(ang);
+        const py = cy + size * Math.sin(ang);
+        if (i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+    }
     for (let y=0;y<h;y++){
       for (let x=0;x<w;x++){
         const c = state.map.grid[y][x];
@@ -48,19 +65,30 @@ const View = {
         if (c === '.') color = '#182230';
         else if (c === '#') color = '#3b4252';
         else if (c === '~') color = '#1f6fd1';
+        const [cx, cy] = hexCenter(x,y);
         ctx.fillStyle = color;
-        ctx.fillRect(x*cw, y*ch, cw-1, ch-1);
+        hexPath(cx, cy);
+        ctx.fill();
+        ctx.save();
+        ctx.strokeStyle = '#444a55';
+        ctx.lineWidth = 0.75;
+        ctx.setLineDash([2,2]);
+        ctx.stroke();
+        ctx.restore();
       }
     }
+    const [ax, ay] = hexCenter(state.bases[0].x, state.bases[0].y);
     ctx.fillStyle = '#ffcc00';
-    ctx.fillRect(state.bases[0].x*cw, state.bases[0].y*ch, cw-1, ch-1);
+    ctx.beginPath(); ctx.arc(ax, ay, size*0.6, 0, Math.PI*2); ctx.fill();
+    const [bx, by] = hexCenter(state.bases[1].x, state.bases[1].y);
     ctx.fillStyle = '#ff3366';
-    ctx.fillRect(state.bases[1].x*cw, state.bases[1].y*ch, cw-1, ch-1);
+    ctx.beginPath(); ctx.arc(bx, by, size*0.6, 0, Math.PI*2); ctx.fill();
     for (const u of state.units){
       const team = u.team === 'A' ? '#5bd87a' : '#f08bdc';
+      const [ux, uy] = hexCenter(u.x, u.y);
       ctx.fillStyle = team;
       ctx.beginPath();
-      ctx.arc(u.x*cw + cw/2, u.y*ch + ch/2, Math.max(3, Math.min(cw,ch)/3), 0, Math.PI*2);
+      ctx.arc(ux, uy, Math.max(3, size*0.35), 0, Math.PI*2);
       ctx.fill();
     }
   }

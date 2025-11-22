@@ -1,6 +1,8 @@
 import pygame
+import math
 from renderer.base import Renderer
 from core.map import PLAIN, MOUNTAIN, RIVER
+from utils.common import hex_line, hex_distance
 
 class PygameRenderer(Renderer):
     def __init__(self, cell_size=24, fps=60):
@@ -15,6 +17,9 @@ class PygameRenderer(Renderer):
         self.paused = False
         self.speed = 1.0
         self.ui_rects = {}
+        self.map_pad_x = int(self.cell_size)
+        self.map_pad_top = int(self.cell_size)
+        self.step_mode = False
         self.colors = {
             'bg': (18, 18, 18),
             'grid': (32, 32, 32),
@@ -30,8 +35,8 @@ class PygameRenderer(Renderer):
 
     def initialize(self, gamestate):
         pygame.init()
-        w = gamestate.map.width * self.cell_size
-        h = gamestate.map.height * self.cell_size + self.ui_top
+        w = int(self.cell_size * math.sqrt(3) * (gamestate.map.width + 0.5)) + self.map_pad_x * 2
+        h = int(self.cell_size * 1.5 * gamestate.map.height + self.ui_top + self.map_pad_top)
         self.screen = pygame.display.set_mode((w, h))
         pygame.display.set_caption('RTS 模拟')
         self.clock = pygame.time.Clock()
@@ -73,6 +78,7 @@ class PygameRenderer(Renderer):
         vis = None
         if self.view_mode in ('A','B'):
             vis = self.compute_visibility(gamestate, self.view_mode)
+            gamestate.record_explored(self.view_mode, list(vis))
         self.render_map(gamestate, vis)
         self.render_bases(gamestate, vis)
         self.render_units(gamestate, vis)
@@ -82,17 +88,35 @@ class PygameRenderer(Renderer):
         return ''
 
     def render_map(self, gamestate, vis=None):
+        size = self.cell_size
+        side_exp = gamestate.explored.get(self.view_mode, set()) if self.view_mode in ('A','B') else None
         for y in range(gamestate.map.height):
             for x in range(gamestate.map.width):
                 t = gamestate.map.grid[y][x]
-                color = self.colors.get(t, self.colors[PLAIN])
-                rx = x * self.cell_size
-                ry = y * self.cell_size + self.ui_top
-                pygame.draw.rect(self.screen, color, pygame.Rect(rx, ry, self.cell_size, self.cell_size))
-                if vis is not None and (x, y) not in vis:
-                    s = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
-                    s.fill((0,0,0,160))
-                    self.screen.blit(s, (rx, ry))
+                if self.view_mode in ('A','B'):
+                    if (x, y) in side_exp:
+                        color = self.colors.get(t, self.colors[PLAIN])
+                    else:
+                        color = self.colors.get(PLAIN)
+                else:
+                    color = self.colors.get(t, self.colors[PLAIN])
+                cx = self.map_pad_x + size * math.sqrt(3) * (x + 0.5 * (y & 1))
+                cy = self.ui_top + self.map_pad_top + size * 1.5 * y
+                pts = []
+                for i in range(6):
+                    ang = math.pi/180 * (60 * i + 30)
+                    px = cx + size * math.cos(ang)
+                    py = cy + size * math.sin(ang)
+                    pts.append((px, py))
+                pygame.draw.polygon(self.screen, color, pts)
+                if self.view_mode in ('A','B'):
+                    if vis is not None and (x, y) in vis:
+                        pass
+                    elif (x, y) in side_exp:
+                        self._poly_overlay(pts, (0, 0, 0, 80))
+                    else:
+                        self._poly_overlay(pts, (100, 100, 110, 160))
+                self._stroke_dashed(pts, (60,60,70), 1)
 
     def render_bases(self, gamestate, vis=None):
         bases = [gamestate.base_a, gamestate.base_b]
@@ -101,22 +125,22 @@ class PygameRenderer(Renderer):
                 kb = gamestate.known_enemy_base.get(self.view_mode)
                 if kb == base.pos():
                     color = self.colors.get(base.team)
-                    cx = base.x * self.cell_size + self.cell_size // 2
-                    cy = base.y * self.cell_size + self.ui_top + self.cell_size // 2
-                    r = self.cell_size // 2
-                    pygame.draw.circle(self.screen, color, (cx, cy), r, 2)
+                    cx = self.map_pad_x + self.cell_size * math.sqrt(3) * (base.x + 0.5 * (base.y & 1))
+                    cy = self.ui_top + self.map_pad_top + self.cell_size * 1.5 * base.y
+                    r = int(self.cell_size * 0.6)
+                    pygame.draw.circle(self.screen, color, (int(cx), int(cy)), r, 2)
                     continue
                 else:
                     continue
             color = self.colors.get(base.team)
-            cx = base.x * self.cell_size + self.cell_size // 2
-            cy = base.y * self.cell_size + self.ui_top + self.cell_size // 2
-            r = self.cell_size // 2
-            pygame.draw.circle(self.screen, color, (cx, cy), r)
-            bw = self.cell_size
+            cx = self.map_pad_x + self.cell_size * math.sqrt(3) * (base.x + 0.5 * (base.y & 1))
+            cy = self.ui_top + self.map_pad_top + self.cell_size * 1.5 * base.y
+            r = int(self.cell_size * 0.6)
+            pygame.draw.circle(self.screen, color, (int(cx), int(cy)), r)
+            bw = int(self.cell_size * 1.6)
             bh = 6
-            bx = base.x * self.cell_size
-            by = base.y * self.cell_size + self.ui_top - 8
+            bx = int(cx - bw/2)
+            by = int(cy - r - 10)
             pygame.draw.rect(self.screen, self.colors['hp_bar_bg'], pygame.Rect(bx, by, bw, bh))
             ratio = max(0.0, min(1.0, base.hp / 500.0))
             pygame.draw.rect(self.screen, self.colors['hp_bar_fg'], pygame.Rect(bx, by, int(bw * ratio), bh))
@@ -126,16 +150,14 @@ class PygameRenderer(Renderer):
             if vis is not None and u.team != self.view_mode and (u.x, u.y) not in vis:
                 continue
             color = self.colors.get(u.team)
-            rx = u.x * self.cell_size
-            ry = u.y * self.cell_size + self.ui_top
+            cx = self.map_pad_x + self.cell_size * math.sqrt(3) * (u.x + 0.5 * (u.y & 1))
+            cy = self.ui_top + self.map_pad_top + self.cell_size * 1.5 * u.y
             if u.kind == 'Infantry':
-                pygame.draw.rect(self.screen, color, pygame.Rect(rx + 6, ry + 6, self.cell_size - 12, self.cell_size - 12))
+                pygame.draw.rect(self.screen, color, pygame.Rect(int(cx - 6), int(cy - 6), 12, 12))
             elif u.kind == 'Archer':
-                cx = rx + self.cell_size // 2
-                cy = ry + self.cell_size // 2
-                pygame.draw.circle(self.screen, color, (cx, cy), self.cell_size // 3)
+                pygame.draw.circle(self.screen, color, (int(cx), int(cy)), max(3, int(self.cell_size * 0.35)))
             else:
-                points = [(rx + self.cell_size // 2, ry + 4), (rx + 4, ry + self.cell_size - 4), (rx + self.cell_size - 4, ry + self.cell_size - 4)]
+                points = [(int(cx), int(cy - 8)), (int(cx - 8), int(cy + 8)), (int(cx + 8), int(cy + 8))]
                 pygame.draw.polygon(self.screen, color, points)
 
     def render_hud(self, gamestate, tick):
@@ -172,10 +194,14 @@ class PygameRenderer(Renderer):
         ctrl_y2 = feed_h + 38
         right = w - 20
         pause_rect = pygame.Rect(right - 26, ctrl_y1, 24, 24)
+        step_toggle = pygame.Rect(right - 56, ctrl_y1, 24, 24)
         sp_minus = pygame.Rect(right - 86, ctrl_y2, 24, 24)
+        step_once = pygame.Rect(right - 56, ctrl_y2, 24, 24)
         sp_plus = pygame.Rect(right - 26, ctrl_y2, 24, 24)
         self.ui_rects = {
             'pause': pause_rect,
+            'step_mode': step_toggle,
+            'step_once': step_once,
             'speed_minus': sp_minus,
             'speed_plus': sp_plus,
         }
@@ -189,11 +215,23 @@ class PygameRenderer(Renderer):
         self.screen.blit(lab1, (right - 130, ctrl_y1 + 4))
         stxt = self.font.render('运行' if not self.paused else '暂停', True, self.colors['text'])
         self.screen.blit(stxt, (right - 90, ctrl_y1 + 4))
+        pygame.draw.rect(self.screen, (60,60,70), step_toggle)
+        pygame.draw.rect(self.screen, (120,120,140), step_toggle, 2)
+        mtxt = self.font.render('S', True, self.colors['text'])
+        self.screen.blit(mtxt, (step_toggle.x + 6, step_toggle.y + 2))
+        labm = self.font.render('模式', True, self.colors['text'])
+        self.screen.blit(labm, (right - 190, ctrl_y1 + 4))
+        mval = self.font.render('逐步' if self.step_mode else '连续', True, self.colors['text'])
+        self.screen.blit(mval, (right - 150, ctrl_y1 + 4))
 
         pygame.draw.rect(self.screen, (60,60,70), sp_minus)
         pygame.draw.rect(self.screen, (120,120,140), sp_minus, 2)
         msurf = self.font.render('-', True, self.colors['text'])
         self.screen.blit(msurf, (sp_minus.x + 6, sp_minus.y + 2))
+        pygame.draw.rect(self.screen, (60,60,70), step_once)
+        pygame.draw.rect(self.screen, (120,120,140), step_once, 2)
+        osurf = self.font.render('⏭', True, self.colors['text'])
+        self.screen.blit(osurf, (step_once.x + 2, step_once.y + 2))
         pygame.draw.rect(self.screen, (60,60,70), sp_plus)
         pygame.draw.rect(self.screen, (120,120,140), sp_plus, 2)
         psurf = self.font.render('+', True, self.colors['text'])
@@ -202,26 +240,6 @@ class PygameRenderer(Renderer):
         self.screen.blit(sval, (right - 58, ctrl_y2 + 2))
 
     def compute_visibility(self, gamestate, side):
-        def line_points(x0, y0, x1, y1):
-            points = []
-            dx = abs(x1 - x0)
-            dy = -abs(y1 - y0)
-            sx = 1 if x0 < x1 else -1
-            sy = 1 if y0 < y1 else -1
-            err = dx + dy
-            x, y = x0, y0
-            while True:
-                points.append((x, y))
-                if x == x1 and y == y1:
-                    break
-                e2 = 2 * err
-                if e2 >= dy:
-                    err += dy
-                    x += sx
-                if e2 <= dx:
-                    err += dx
-                    y += sy
-            return points
         vis = set()
         ents = [u for u in gamestate.units if u.team == side]
         base = gamestate.base_a if side == 'A' else gamestate.base_b
@@ -229,23 +247,58 @@ class PygameRenderer(Renderer):
         for e in ents:
             r = getattr(e, 'vision', 6)
             ex, ey = e.pos()
-            for dy in range(-r, r+1):
-                for dx in range(-r, r+1):
-                    x = ex + dx
-                    y = ey + dy
-                    if not gamestate.map.in_bounds(x, y):
-                        continue
-                    if abs(dx) + abs(dy) > r:
+            y0 = max(0, ey - r)
+            y1 = min(gamestate.map.height - 1, ey + r)
+            x0 = max(0, ex - r)
+            x1 = min(gamestate.map.width - 1, ex + r)
+            for y in range(y0, y1 + 1):
+                for x in range(x0, x1 + 1):
+                    if hex_distance((ex, ey), (x, y)) > r:
                         continue
                     blocked = False
-                    for px, py in line_points(ex, ey, x, y):
+                    for px, py in hex_line((ex, ey), (x, y)):
                         if (px, py) == (ex, ey):
                             continue
+                        if not gamestate.map.in_bounds(px, py):
+                            blocked = True
+                            break
                         t = gamestate.map.grid[py][px]
-                        if t == MOUNTAIN:
-                            if (px, py) != (x, y):
-                                blocked = True
-                                break
+                        if t == MOUNTAIN and (px, py) != (x, y):
+                            blocked = True
+                            break
                     if not blocked:
                         vis.add((x, y))
         return vis
+
+    def _poly_overlay(self, pts, color):
+        minx = min(p[0] for p in pts)
+        maxx = max(p[0] for p in pts)
+        miny = min(p[1] for p in pts)
+        maxy = max(p[1] for p in pts)
+        w = int(maxx - minx) + 2
+        h = int(maxy - miny) + 2
+        overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+        adj = [(p[0] - minx + 1, p[1] - miny + 1) for p in pts]
+        pygame.draw.polygon(overlay, color, adj)
+        self.screen.blit(overlay, (int(minx), int(miny)))
+    def _stroke_dashed(self, pts, color, width):
+        dash = 4
+        gap = 2
+        for i in range(len(pts)):
+            x1, y1 = pts[i]
+            x2, y2 = pts[(i+1) % len(pts)]
+            dx = x2 - x1
+            dy = y2 - y1
+            dist = math.hypot(dx, dy)
+            if dist <= 0:
+                continue
+            vx = dx / dist
+            vy = dy / dist
+            pos = 0.0
+            while pos + dash <= dist:
+                sx = x1 + vx * pos
+                sy = y1 + vy * pos
+                ex = x1 + vx * (pos + dash)
+                ey = y1 + vy * (pos + dash)
+                pygame.draw.line(self.screen, color, (sx, sy), (ex, ey), width)
+                pos += dash + gap

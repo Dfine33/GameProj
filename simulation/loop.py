@@ -3,7 +3,7 @@ import sys
 import threading
 import time
 from core.state import GameState
-from utils.common import adjacent_positions
+from utils.common import hex_neighbors, hex_distance
 
 class SimulationLoop:
     def __init__(self, policy, renderer=None):
@@ -14,40 +14,25 @@ class SimulationLoop:
 
     def step_towards(self, unit, dest):
         ux, uy = unit.pos()
-        dx = 0
-        dy = 0
-        if dest[0] > ux:
-            dx = 1
-        elif dest[0] < ux:
-            dx = -1
-        if dest[1] > uy:
-            dy = 1
-        elif dest[1] < uy:
-            dy = -1
-        candidates = []
-        if dx != 0:
-            candidates.append((ux+dx, uy))
-        if dy != 0:
-            candidates.append((ux, uy+dy))
-        random.shuffle(candidates)
-        for nx, ny in candidates:
+        nbrs = hex_neighbors(ux, uy)
+        random.shuffle(nbrs)
+        best = None
+        best_d = 10**9
+        for nx, ny in nbrs:
             if self.state.map.can_walk(nx, ny) and (nx, ny) not in self.state.occupied:
-                unit.x = nx
-                unit.y = ny
-                return True
-        dirs = [(ux+1, uy), (ux-1, uy), (ux, uy+1), (ux, uy-1)]
-        random.shuffle(dirs)
-        for nx, ny in dirs:
-            if self.state.map.can_walk(nx, ny) and (nx, ny) not in self.state.occupied:
-                unit.x = nx
-                unit.y = ny
-                return True
+                d = hex_distance((nx,ny), dest)
+                if d < best_d:
+                    best_d = d
+                    best = (nx, ny)
+        if best is not None:
+            unit.x, unit.y = best
+            return True
         return False
 
     def wander(self, unit):
-        dirs = [(unit.x+1, unit.y), (unit.x-1, unit.y), (unit.x, unit.y+1), (unit.x, unit.y-1)]
-        random.shuffle(dirs)
-        for nx, ny in dirs:
+        nbrs = hex_neighbors(unit.x, unit.y)
+        random.shuffle(nbrs)
+        for nx, ny in nbrs:
             if self.state.map.can_walk(nx, ny) and (nx, ny) not in self.state.occupied:
                 unit.x = nx
                 unit.y = ny
@@ -58,7 +43,7 @@ class SimulationLoop:
         if base.spawn_cooldown > 0:
             base.spawn_cooldown -= 1
             return
-        spots = [p for p in adjacent_positions(base.x, base.y) if self.state.map.in_bounds(p[0], p[1])]
+        spots = [p for p in hex_neighbors(base.x, base.y) if self.state.map.in_bounds(p[0], p[1])]
         random.shuffle(spots)
         placed = False
         for sx, sy in spots:

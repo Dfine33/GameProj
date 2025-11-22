@@ -5,7 +5,7 @@ from core.map import PLAIN
 from utils.common import manhattan, adjacent_positions
 
 class GameState:
-    def __init__(self, width=40, height=20):
+    def __init__(self, width=60, height=30):
         self.map = generate(width, height)
         self.base_a, self.base_b = self.place_bases()
         self.units = []
@@ -13,6 +13,7 @@ class GameState:
         self.tick = 0
         self.actions = []
         self.known_enemy_base = {'A': None, 'B': None}
+        self.explored = {'A': set(), 'B': set()}
 
     def update_occupied(self):
         self.occupied = set(u.pos() for u in self.units)
@@ -29,6 +30,8 @@ class GameState:
         return {
             'tick': self.tick,
             'map': {'width': self.map.width, 'height': self.map.height, 'grid': self.map.grid},
+            'grid_type': 'hex',
+            'layout': 'odd-r',
             'bases': [
                 {'team': self.base_a.team, 'x': self.base_a.x, 'y': self.base_a.y, 'hp': self.base_a.hp},
                 {'team': self.base_b.team, 'x': self.base_b.x, 'y': self.base_b.y, 'hp': self.base_b.hp}
@@ -37,7 +40,11 @@ class GameState:
                 {'team': u.team, 'kind': u.kind, 'x': u.x, 'y': u.y, 'atk': u.atk, 'rng': u.rng, 'spd': u.spd, 'hp': u.hp, 'armor': u.armor, 'vision': u.vision}
                 for u in self.units
             ],
-            'known_enemy_base': self.known_enemy_base
+            'known_enemy_base': self.known_enemy_base,
+            'explored': {
+                'A': [(x, y) for (x, y) in self.explored['A']],
+                'B': [(x, y) for (x, y) in self.explored['B']]
+            }
         }
 
     @staticmethod
@@ -62,11 +69,34 @@ class GameState:
         keb = data.get('known_enemy_base')
         if isinstance(keb, dict):
             gs.known_enemy_base = {'A': keb.get('A'), 'B': keb.get('B')}
+        exp = data.get('explored', {})
+        aexp = exp.get('A', [])
+        bexp = exp.get('B', [])
+        gs.explored = {
+            'A': set((int(x), int(y)) for x, y in aexp if isinstance(x, int) and isinstance(y, int)),
+            'B': set((int(x), int(y)) for x, y in bexp if isinstance(x, int) and isinstance(y, int))
+        }
         gs.update_occupied()
         return gs
 
     def record_enemy_base(self, side, pos):
         self.known_enemy_base[side] = pos
+
+    def record_explored(self, side, cells):
+        self.explored.setdefault(side, set())
+        for c in cells:
+            self.explored[side].add((c[0], c[1]))
+
+    def is_explored(self, side, x, y):
+        return (x, y) in self.explored.get(side, set())
+
+    def get_explored_ratio(self, side):
+        total = self.map.width * self.map.height
+        cnt = len(self.explored.get(side, set()))
+        return cnt / total if total > 0 else 0.0
+
+    def get_explored_cells(self, side):
+        return list(self.explored.get(side, set()))
 
     def find_open(self, preferred):
         for dx in range(-2, 3):
