@@ -4,13 +4,15 @@ import threading
 import time
 from core.state import GameState
 from utils.common import hex_neighbors, hex_distance
+from ai.spawn_strategy import RandomSpawnStrategy
 
 class SimulationLoop:
-    def __init__(self, policy, renderer=None):
+    def __init__(self, policy, renderer=None, initial_state=None, spawn_strategy=None):
         self.policy = policy
         self.renderer = renderer
-        self.state = GameState()
+        self.state = initial_state if initial_state is not None else GameState()
         self.lock = threading.Lock()
+        self.spawn_strategy = spawn_strategy or RandomSpawnStrategy()
 
     def step_towards(self, unit, dest):
         ux, uy = unit.pos()
@@ -40,28 +42,25 @@ class SimulationLoop:
         return False
 
     def spawn_from_base(self, base):
-        if base.spawn_cooldown > 0:
-            base.spawn_cooldown -= 1
+        points = getattr(base, 'build_points_per_turn', 0) + getattr(base, 'build_point_bonus', 0)
+        kinds = self.spawn_strategy.choose_units(points, base.team, self.state)
+        if not kinds:
             return
         spots = [p for p in hex_neighbors(base.x, base.y) if self.state.map.in_bounds(p[0], p[1])]
         random.shuffle(spots)
-        placed = False
-        for sx, sy in spots:
-            if self.state.map.can_walk(sx, sy) and (sx, sy) not in self.state.occupied:
-                nu = self.state.spawn_unit(base.team, (sx, sy))
-                self.state.add_unit(nu)
-                base.spawn_cooldown = random.randint(2, 4)
-                placed = True
-                break
-        if not placed:
-            base.spawn_cooldown = 1
+        for kind in kinds:
+            for sx, sy in spots:
+                if self.state.map.can_walk(sx, sy) and (sx, sy) not in self.state.occupied:
+                    nu = self.state.spawn_unit(base.team, (sx, sy), kind)
+                    self.state.add_unit(nu)
+                    break
 
     def apply_action(self, unit, action):
         if action.kind == 'attack':
             target = action.target
             if hasattr(target, 'pos'):
                 if hasattr(target, 'hp'):
-                    if abs(unit.x - target.x) + abs(unit.y - target.y) <= unit.rng:
+                    if hex_distance(unit.pos(), target.pos()) <= unit.rng:
                         dmg = self.state.damage_value(unit, target)
                         target.hp -= dmg
                         if hasattr(target, 'kind') and target.hp <= 0:

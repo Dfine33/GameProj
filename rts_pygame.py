@@ -1,7 +1,13 @@
 import pygame
+import os
+import json
 from simulation.loop import SimulationLoop
 from ai.policy import TwoPhasePolicy
 from renderer.pygame_renderer import PygameRenderer
+from controllers.game_controller import GameController
+from views.pygame_view import PygameView
+from ai.unit_policies import CompositePolicy
+from core.state import GameState
 
 def draw_center_text(screen, font, text, y, color):
     w, h = screen.get_size()
@@ -81,14 +87,18 @@ def draw_feed(renderer):
         surf = renderer.font.render(it.text, True, (240, 220, 80))
         renderer.screen.blit(surf, (int(it.x), int(it.y)))
 
-def main():
+def run_mvc():
     renderer = PygameRenderer()
-    loop = SimulationLoop(TwoPhasePolicy(), renderer)
-    renderer.initialize(loop.state)
+    view = PygameView()
+    controller = GameController(renderer, view)
+    controller.loop.policy = CompositePolicy()
+    controller.run()
     w, h = renderer.screen.get_size()
     renderer.menu_buttons = [
-        Button((w//2-80, 180, 160, 36), '开始', 'start'),
-        Button((w//2-80, 226, 160, 36), '退出', 'quit'),
+        Button((w//2-100, 170, 200, 36), '随机开始', 'start_random'),
+        Button((w//2-100, 216, 200, 36), '选择地图', 'select_map'),
+        Button((w//2-100, 262, 200, 36), '地图编辑器', 'map_editor'),
+        Button((w//2-100, 308, 200, 36), '退出', 'quit'),
     ]
     renderer.gameover_buttons = [
         Button((w//2-180, 230, 160, 36), '重开', 'restart'),
@@ -106,6 +116,9 @@ def main():
     renderer.paused = paused
     renderer.speed = speed
     renderer.step_mode = step_mode
+    map_select = []
+    select_buttons = []
+    current_initial_state = None
     while renderer.running:
         mx, my = pygame.mouse.get_pos()
         for b in renderer.menu_buttons:
@@ -121,7 +134,11 @@ def main():
                         state_view = 'RUNNING'
                     elif event.key == pygame.K_ESCAPE:
                         renderer.running = False
+                elif state_view == 'MAP_SELECT':
+                    if event.key == pygame.K_ESCAPE:
+                        state_view = 'MENU'
                 elif state_view == 'RUNNING':
+                    uni = (event.unicode or '').lower()
                     if event.key == pygame.K_ESCAPE:
                         state_view = 'MENU'
                     elif event.key == pygame.K_SPACE:
@@ -133,14 +150,14 @@ def main():
                     elif event.key == pygame.K_RIGHT:
                         speed = min(3.0, speed + 0.25)
                         renderer.speed = speed
-                    elif event.key == pygame.K_t:
+                    elif event.key == pygame.K_t or uni == 't':
                         step_mode = not step_mode
                         renderer.step_mode = step_mode
-                    elif event.key == pygame.K_n:
+                    elif event.key == pygame.K_n or uni == 'n':
                         do_step = True
                 elif state_view == 'GAMEOVER':
                     if event.key == pygame.K_r:
-                        loop = SimulationLoop(TwoPhasePolicy(), renderer)
+                        loop = SimulationLoop(TwoPhasePolicy(), renderer, initial_state=current_initial_state)
                         renderer.initialize(loop.state)
                         state_view = 'RUNNING'
                         winner = None
@@ -161,15 +178,38 @@ def main():
                 if state_view == 'MENU':
                     for b in renderer.menu_buttons:
                         if b.rect.collidepoint(event.pos):
-                            if b.action == 'start':
+                            if b.action == 'start_random':
+                                loop = SimulationLoop(TwoPhasePolicy(), renderer)
+                                renderer.initialize(loop.state)
                                 state_view = 'RUNNING'
+                                current_initial_state = None
+                            elif b.action == 'select_map':
+                                os.makedirs('maps', exist_ok=True)
+                                files = [f for f in os.listdir('maps') if f.lower().endswith('.json')]
+                                map_select = files
+                                select_buttons = []
+                                x0 = w//2 - 220
+                                y0 = 180
+                                y = y0
+                                for name in map_select[:10]:
+                                    btn = Button((x0, y, 440, 30), name, f'select:{name}')
+                                    select_buttons.append(btn)
+                                    y += 36
+                                state_view = 'MAP_SELECT'
+                            elif b.action == 'map_editor':
+                                try:
+                                    import map_editor
+                                    map_editor.main()
+                                    renderer.initialize(loop.state)
+                                except Exception:
+                                    pass
                             elif b.action == 'quit':
                                 renderer.running = False
                 elif state_view == 'GAMEOVER':
                     for b in renderer.gameover_buttons:
                         if b.rect.collidepoint(event.pos):
                             if b.action == 'restart':
-                                loop = SimulationLoop(TwoPhasePolicy(), renderer)
+                                loop = SimulationLoop(TwoPhasePolicy(), renderer, initial_state=current_initial_state)
                                 renderer.initialize(loop.state)
                                 state_view = 'RUNNING'
                                 winner = None
@@ -194,8 +234,29 @@ def main():
                         renderer.step_mode = step_mode
                     elif r.get('step_once') and r['step_once'].collidepoint(event.pos):
                         do_step = True
+                elif state_view == 'MAP_SELECT':
+                    for b in select_buttons:
+                        if b.rect.collidepoint(event.pos):
+                            name = b.action.split(':',1)[1]
+                            try:
+                                with open(os.path.join('maps', name), 'r', encoding='utf-8') as f:
+                                    data = json.load(f)
+                                st = GameState.deserialize(data)
+                                loop = SimulationLoop(TwoPhasePolicy(), renderer, initial_state=st)
+                                renderer.initialize(loop.state)
+                                state_view = 'RUNNING'
+                                current_initial_state = st
+                            except Exception:
+                                state_view = 'MENU'
         if state_view == 'MENU':
             draw_menu(renderer)
+        elif state_view == 'MAP_SELECT':
+            renderer.screen.fill((20,20,24))
+            draw_center_text(renderer.screen, renderer.title_font, '选择地图', 120, (240,240,240))
+            for b in select_buttons:
+                b.hover = b.rect.collidepoint(mx, my)
+                b.draw(renderer.screen, renderer.font)
+            pygame.display.flip()
         elif state_view == 'RUNNING':
             if step_mode:
                 if do_step:
@@ -237,4 +298,4 @@ def main():
     renderer.close()
 
 if __name__ == '__main__':
-    main()
+    run_mvc()

@@ -3,6 +3,7 @@ from core.entities import Base, Unit
 from core.map import Map, generate
 from core.map import PLAIN
 from utils.common import manhattan, adjacent_positions
+from core.balance import BASE_BUILD_POINTS, UNIT_STATS
 
 class GameState:
     def __init__(self, width=60, height=30):
@@ -14,6 +15,7 @@ class GameState:
         self.actions = []
         self.known_enemy_base = {'A': None, 'B': None}
         self.explored = {'A': set(), 'B': set()}
+        self.ensure_connectivity()
 
     def update_occupied(self):
         self.occupied = set(u.pos() for u in self.units)
@@ -33,8 +35,8 @@ class GameState:
             'grid_type': 'hex',
             'layout': 'odd-r',
             'bases': [
-                {'team': self.base_a.team, 'x': self.base_a.x, 'y': self.base_a.y, 'hp': self.base_a.hp},
-                {'team': self.base_b.team, 'x': self.base_b.x, 'y': self.base_b.y, 'hp': self.base_b.hp}
+                {'team': self.base_a.team, 'x': self.base_a.x, 'y': self.base_a.y, 'hp': self.base_a.hp, 'build_points_per_turn': getattr(self.base_a, 'build_points_per_turn', BASE_BUILD_POINTS), 'build_point_bonus': getattr(self.base_a, 'build_point_bonus', 0)},
+                {'team': self.base_b.team, 'x': self.base_b.x, 'y': self.base_b.y, 'hp': self.base_b.hp, 'build_points_per_turn': getattr(self.base_b, 'build_points_per_turn', BASE_BUILD_POINTS), 'build_point_bonus': getattr(self.base_b, 'build_point_bonus', 0)}
             ],
             'units': [
                 {'team': u.team, 'kind': u.kind, 'x': u.x, 'y': u.y, 'atk': u.atk, 'rng': u.rng, 'spd': u.spd, 'hp': u.hp, 'armor': u.armor, 'vision': u.vision}
@@ -60,8 +62,8 @@ class GameState:
         if len(bases) >= 2:
             a = bases[0]
             b = bases[1]
-            gs.base_a = Base(a.get('team','A'), a.get('x',1), a.get('y',1), a.get('hp',500))
-            gs.base_b = Base(b.get('team','B'), b.get('x',m.width-2), b.get('y',m.height-2), b.get('hp',500))
+            gs.base_a = Base(a.get('team','A'), a.get('x',1), a.get('y',1), a.get('hp',500), build_points_per_turn=a.get('build_points_per_turn', BASE_BUILD_POINTS), build_point_bonus=a.get('build_point_bonus', 0))
+            gs.base_b = Base(b.get('team','B'), b.get('x',m.width-2), b.get('y',m.height-2), b.get('hp',500), build_points_per_turn=b.get('build_points_per_turn', BASE_BUILD_POINTS), build_point_bonus=b.get('build_point_bonus', 0))
         gs.units = []
         for ud in data.get('units', []):
             gs.units.append(Unit(ud.get('team','A'), ud.get('kind','Infantry'), ud.get('x',0), ud.get('y',0), ud.get('atk',10), ud.get('rng',1), ud.get('spd',1), ud.get('hp',50), ud.get('armor',0), ud.get('vision',6)))
@@ -97,6 +99,33 @@ class GameState:
 
     def get_explored_cells(self, side):
         return list(self.explored.get(side, set()))
+    def ensure_connectivity(self):
+        from collections import deque
+        from utils.common import hex_neighbors, hex_line
+        ax, ay = self.base_a.pos()
+        bx, by = self.base_b.pos()
+        vis = set()
+        dq = deque()
+        dq.append((ax, ay))
+        vis.add((ax, ay))
+        ok = False
+        while dq:
+            x, y = dq.popleft()
+            if (x, y) == (bx, by):
+                ok = True
+                break
+            for nx, ny in hex_neighbors(x, y):
+                if not self.map.in_bounds(nx, ny):
+                    continue
+                if (nx, ny) in vis:
+                    continue
+                if self.map.can_walk(nx, ny) or (nx, ny) == (bx, by):
+                    vis.add((nx, ny))
+                    dq.append((nx, ny))
+        if not ok:
+            for x, y in hex_line((ax, ay), (bx, by)):
+                if self.map.in_bounds(x, y):
+                    self.map.grid[y][x] = PLAIN
 
     def find_open(self, preferred):
         for dx in range(-2, 3):
@@ -114,15 +143,11 @@ class GameState:
     def place_bases(self):
         a = self.find_open((1, 1))
         b = self.find_open((self.map.width-2, self.map.height-2))
-        return Base('A', a[0], a[1], 500), Base('B', b[0], b[1], 500)
+        return Base('A', a[0], a[1], 500, build_points_per_turn=BASE_BUILD_POINTS), Base('B', b[0], b[1], 500, build_points_per_turn=BASE_BUILD_POINTS)
 
-    def spawn_unit(self, team, pos):
-        k = random.choice(['Infantry','Archer','Cavalry'])
-        if k == 'Infantry':
-            return Unit(team, k, pos[0], pos[1], 12, 1, 1, 60, 4, 6)
-        if k == 'Archer':
-            return Unit(team, k, pos[0], pos[1], 9, 3, 1, 45, 2, 8)
-        return Unit(team, k, pos[0], pos[1], 14, 1, 2, 50, 3, 7)
+    def spawn_unit(self, team, pos, kind):
+        st = UNIT_STATS[kind]
+        return Unit(team, kind, pos[0], pos[1], st['atk'], st['rng'], st['spd'], st['hp'], st['armor'], st['vision'])
 
     def damage_value(self, attacker, defender):
         return max(0, attacker.atk - getattr(defender, 'armor', 0))

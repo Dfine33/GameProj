@@ -1,10 +1,12 @@
 class Base:
-    def __init__(self, team, x, y, hp):
+    def __init__(self, team, x, y, hp, build_points_per_turn=None, build_point_bonus=0):
         self.team = team
         self.x = x
         self.y = y
         self.hp = hp
         self.spawn_cooldown = 0
+        self.build_points_per_turn = build_points_per_turn
+        self.build_point_bonus = build_point_bonus
 
     def pos(self):
         return self.x, self.y
