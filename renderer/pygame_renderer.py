@@ -2,7 +2,7 @@ import pygame
 import math
 from renderer.base import Renderer
 from core.map import PLAIN, MOUNTAIN, RIVER
-from utils.common import hex_line, hex_distance
+from utils.common import hex_line, hex_distance, hex_neighbors
 
 class PygameRenderer(Renderer):
     def __init__(self, cell_size=24, fps=60):
@@ -20,6 +20,9 @@ class PygameRenderer(Renderer):
         self.map_pad_x = int(self.cell_size)
         self.map_pad_top = int(self.cell_size)
         self.step_mode = False
+        self.preview_recruits = []
+        self.preview_actions = {}
+        self.preview_paths = {}
         self.colors = {
             'bg': (18, 18, 18),
             'grid': (32, 32, 32),
@@ -82,10 +85,48 @@ class PygameRenderer(Renderer):
         self.render_map(gamestate, vis)
         self.render_bases(gamestate, vis)
         self.render_units(gamestate, vis)
+        self.render_overlays(gamestate)
+        self.render_panel(gamestate)
         self.render_hud(gamestate, tick)
         pygame.display.flip()
         self.clock.tick(self.fps)
         return ''
+
+    def pixel_to_hex(self, px, py):
+        ry = (py - (self.ui_top + self.map_pad_top)) / (1.5 * self.cell_size)
+        y = int(round(ry))
+        if y < 0 or y >= getattr(self, 'last_h', 0):
+            pass
+        offset = 0.5 * (y & 1) * self.cell_size * math.sqrt(3)
+        rx = (px - self.map_pad_x - offset) / (self.cell_size * math.sqrt(3))
+        x = int(round(rx))
+        return (x, y)
+
+    def _draw_ghost_unit(self, kind, team, x, y):
+        cx = self.map_pad_x + self.cell_size * math.sqrt(3) * (x + 0.5 * (y & 1))
+        cy = self.ui_top + self.map_pad_top + self.cell_size * 1.5 * y
+        color = self.colors.get(team, (200,200,200))
+        overlay = pygame.Surface((int(self.cell_size*2), int(self.cell_size*2)), pygame.SRCALPHA)
+        ox = int(cx - self.cell_size)
+        oy = int(cy - self.cell_size)
+        if kind == 'Infantry':
+            pygame.draw.rect(overlay, (*color, 140), pygame.Rect(self.cell_size-6, self.cell_size-6, 12, 12))
+        elif kind == 'Archer':
+            pygame.draw.circle(overlay, (*color, 140), (self.cell_size, self.cell_size), max(3, int(self.cell_size * 0.35)))
+        else:
+            pts = [(self.cell_size, self.cell_size - 8), (self.cell_size - 8, self.cell_size + 8), (self.cell_size + 8, self.cell_size + 8)]
+            pygame.draw.polygon(overlay, (*color, 140), pts)
+        self.screen.blit(overlay, (ox, oy))
+
+    def _draw_arrow(self, sx, sy, tx, ty, color):
+        pygame.draw.line(self.screen, color, (sx, sy), (tx, ty), 2)
+        ang = math.atan2(ty - sy, tx - sx)
+        l = 10
+        hx1 = tx - l * math.cos(ang - math.pi/6)
+        hy1 = ty - l * math.sin(ang - math.pi/6)
+        hx2 = tx - l * math.cos(ang + math.pi/6)
+        hy2 = ty - l * math.sin(ang + math.pi/6)
+        pygame.draw.polygon(self.screen, color, [(tx, ty), (hx1, hy1), (hx2, hy2)])
 
     def render_map(self, gamestate, vis=None):
         size = self.cell_size
@@ -117,6 +158,11 @@ class PygameRenderer(Renderer):
                     else:
                         self._poly_overlay(pts, (100, 100, 110, 160))
                 self._stroke_dashed(pts, (60,60,70), 1)
+                # 选中高亮描边
+                if getattr(self, 'ui_highlights', None) and (x, y) in self.ui_highlights:
+                    pygame.draw.polygon(self.screen, (240,220,80), pts, 3)
+        self.last_w = gamestate.map.width
+        self.last_h = gamestate.map.height
 
     def render_bases(self, gamestate, vis=None):
         bases = [gamestate.base_a, gamestate.base_b]
@@ -183,7 +229,7 @@ class PygameRenderer(Renderer):
         bt = self.font.render(f"B HP {max(0, gamestate.base_b.hp)}", True, self.colors['text'])
         self.screen.blit(at, (ax, y - 18))
         self.screen.blit(bt, (bx, y - 18))
-        info = f"Tick {tick}  Units A {sum(1 for u in gamestate.units if u.team=='A')} / B {sum(1 for u in gamestate.units if u.team=='B')}  View {self.view_mode}"
+        info = f"回合 {tick}  Units A {sum(1 for u in gamestate.units if u.team=='A')} / B {sum(1 for u in gamestate.units if u.team=='B')}  View {self.view_mode}"
         infs = self.font.render(info, True, self.colors['text'])
         self.screen.blit(infs, (20, feed_h + 44))
         for it in getattr(self, 'feed_items', []):
@@ -198,12 +244,14 @@ class PygameRenderer(Renderer):
         sp_minus = pygame.Rect(right - 86, ctrl_y2, 24, 24)
         step_once = pygame.Rect(right - 56, ctrl_y2, 24, 24)
         sp_plus = pygame.Rect(right - 26, ctrl_y2, 24, 24)
+        end_turn = pygame.Rect(right - 146, ctrl_y2, 50, 24)
         self.ui_rects = {
             'pause': pause_rect,
             'step_mode': step_toggle,
             'step_once': step_once,
             'speed_minus': sp_minus,
             'speed_plus': sp_plus,
+            'end_turn': end_turn,
         }
         pygame.draw.rect(self.screen, (60,60,70), pause_rect)
         pygame.draw.rect(self.screen, (120,120,140), pause_rect, 2)
@@ -238,6 +286,151 @@ class PygameRenderer(Renderer):
         self.screen.blit(psurf, (sp_plus.x + 6, sp_plus.y + 2))
         sval = self.font.render(f'{self.speed:.2f}x', True, self.colors['text'])
         self.screen.blit(sval, (right - 58, ctrl_y2 + 2))
+        pygame.draw.rect(self.screen, (60,60,70), end_turn)
+        pygame.draw.rect(self.screen, (120,120,140), end_turn, 2)
+        etxt = self.font.render('结束', True, self.colors['text'])
+        self.screen.blit(etxt, (end_turn.x + 8, end_turn.y + 2))
+
+    def render_overlays(self, gamestate):
+        hl = getattr(self, 'ui_highlights', set())
+        color = (230, 210, 80, 100)
+        for (x, y) in hl:
+            size = self.cell_size
+            cx = self.map_pad_x + size * math.sqrt(3) * (x + 0.5 * (y & 1))
+            cy = self.ui_top + self.map_pad_top + size * 1.5 * y
+            pts = []
+            for i in range(6):
+                ang = math.pi/180 * (60 * i + 30)
+                px = cx + size * math.cos(ang)
+                py = cy + size * math.sin(ang)
+                pts.append((px, py))
+            self._poly_overlay(pts, color)
+        # 预览：招募与单位行动
+        for rec in getattr(self, 'preview_recruits', []):
+            self._draw_ghost_unit(rec.get('kind','Infantry'), rec.get('team','A'), rec['pos'][0], rec['pos'][1])
+        for u, act in getattr(self, 'preview_actions', {}).items():
+            if act.kind == 'move_towards':
+                tx, ty = act.target
+                self._draw_ghost_unit(u.kind, u.team, tx, ty)
+                path = self.preview_paths.get(u, [])
+                if len(path) >= 2:
+                    ppts = []
+                    for (x, y) in path:
+                        cx = self.map_pad_x + self.cell_size * math.sqrt(3) * (x + 0.5 * (y & 1))
+                        cy = self.ui_top + self.map_pad_top + self.cell_size * 1.5 * y
+                        ppts.append((cx, cy))
+                    for i in range(len(ppts)-1):
+                        pygame.draw.line(self.screen, (240,240,120), ppts[i], ppts[i+1], 2)
+            elif act.kind == 'move_path':
+                path = self.preview_paths.get(u, [])
+                if path:
+                    tx, ty = path[-1]
+                    self._draw_ghost_unit(u.kind, u.team, tx, ty)
+                    if len(path) >= 2:
+                        ppts = []
+                        for (x, y) in path:
+                            cx = self.map_pad_x + self.cell_size * math.sqrt(3) * (x + 0.5 * (y & 1))
+                            cy = self.ui_top + self.map_pad_top + self.cell_size * 1.5 * y
+                            ppts.append((cx, cy))
+                        for i in range(len(ppts)-1):
+                            pygame.draw.line(self.screen, (240,240,120), ppts[i], ppts[i+1], 2)
+            elif act.kind == 'attack':
+                tgt = act.target
+                x, y = tgt.pos()
+                size = self.cell_size
+                cx = self.map_pad_x + size * math.sqrt(3) * (x + 0.5 * (y & 1))
+                cy = self.ui_top + self.map_pad_top + size * 1.5 * y
+                pts = []
+                for i in range(6):
+                    ang = math.pi/180 * (60 * i + 30)
+                    px = cx + size * math.cos(ang)
+                    py = cy + size * math.sin(ang)
+                    pts.append((px, py))
+                self._poly_overlay(pts, (220,70,70,120))
+                pygame.draw.polygon(self.screen, (220,70,70), pts, 3)
+                # 攻击箭头预览
+                sx = self.map_pad_x + self.cell_size * math.sqrt(3) * (u.x + 0.5 * (u.y & 1))
+                sy = self.ui_top + self.map_pad_top + self.cell_size * 1.5 * u.y
+                self._draw_arrow(sx, sy, cx, cy, (220,70,70))
+
+    def render_panel(self, gamestate):
+        panel = getattr(self, 'panel', None)
+        self.panel_rects = {}
+        if not panel:
+            return
+        w = 280
+        h = 200
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        surf.fill((16,16,20,220))
+        px = 16
+        py = self.ui_top + 8
+        self.screen.blit(surf, (px, py))
+        title = panel.get('title', '')
+        t = self.title_font.render(title, True, self.colors['text'])
+        self.screen.blit(t, (px + 10, py + 8))
+        if panel.get('type') == 'base':
+            pts = panel.get('points', 0)
+            tt = self.font.render(f'点数 {pts}', True, (220,220,220))
+            self.screen.blit(tt, (px + 10, py + 44))
+            items = panel.get('items', [])
+            selected_item = panel.get('selected_item')
+            y = py + 70
+            for item in items:
+                r = pygame.Rect(px + 10, y, w - 20, 28)
+                fill = (90,90,110) if item['name'] == selected_item else (60,60,70)
+                brd = (240,220,80) if item['name'] == selected_item else (120,120,140)
+                pygame.draw.rect(self.screen, fill, r)
+                pygame.draw.rect(self.screen, brd, r, 3 if item['name'] == selected_item else 2)
+                label = f"{item['name']}  消耗{item['cost']}  ATK{item['atk']} HP{item['hp']} SPD{item['spd']}"
+                ts = self.font.render(label, True, self.colors['text'])
+                self.screen.blit(ts, (r.x + 6, r.y + 4))
+                self.panel_rects[item['name']] = r
+                y += 34
+            undo = pygame.Rect(px + w - 90, py + h - 36, 74, 24)
+            pygame.draw.rect(self.screen, (60,60,70), undo)
+            pygame.draw.rect(self.screen, (200,160,60), undo, 2)
+            uts = self.font.render('撤回', True, self.colors['text'])
+            self.screen.blit(uts, (undo.x + 18, undo.y + 2))
+            self.panel_rects['undo'] = undo
+        elif panel.get('type') == 'unit':
+            unit = panel.get('unit')
+            hp_ratio = max(0.0, min(1.0, unit.hp / max(1, panel.get('max_hp', unit.hp))))
+            bar = pygame.Rect(px + 10, py + 44, w - 20, 14)
+            pygame.draw.rect(self.screen, (100,100,100), bar)
+            pygame.draw.rect(self.screen, (30,200,30), pygame.Rect(bar.x, bar.y, int(bar.width * hp_ratio), bar.height))
+            ts = self.font.render(f'移动点 {unit.spd}', True, self.colors['text'])
+            self.screen.blit(ts, (px + 10, py + 64))
+            # 操作模式按钮
+            mv = pygame.Rect(px + 10, py + 88, 60, 24)
+            at = pygame.Rect(px + 80, py + 88, 60, 24)
+            sel_mode = panel.get('selected_mode')
+            pygame.draw.rect(self.screen, (90,90,110) if sel_mode=='move' else (60,60,70), mv)
+            pygame.draw.rect(self.screen, (240,220,80) if sel_mode=='move' else (120,120,140), mv, 3 if sel_mode=='move' else 2)
+            pygame.draw.rect(self.screen, (90,90,110) if sel_mode=='attack' else (60,60,70), at)
+            pygame.draw.rect(self.screen, (240,220,80) if sel_mode=='attack' else (120,120,140), at, 3 if sel_mode=='attack' else 2)
+            mvts = self.font.render('移动', True, self.colors['text'])
+            atts = self.font.render('攻击', True, self.colors['text'])
+            self.screen.blit(mvts, (mv.x + 12, mv.y + 2))
+            self.screen.blit(atts, (at.x + 12, at.y + 2))
+            self.panel_rects['unit_move'] = mv
+            self.panel_rects['unit_attack'] = at
+            # 目标列表
+            y = py + 120
+            for i, tgt in enumerate(panel.get('targets', [])):
+                rr = pygame.Rect(px + 10, y, w - 20, 24)
+                pygame.draw.rect(self.screen, (60,60,70), rr)
+                pygame.draw.rect(self.screen, (120,120,140), rr, 2)
+                name = '基地' if not hasattr(tgt, 'kind') else f'{tgt.team}-{tgt.kind}'
+                est = self.font.render(f'目标: {name}', True, self.colors['text'])
+                self.screen.blit(est, (rr.x + 6, rr.y + 2))
+                self.panel_rects[f'target_{i}'] = rr
+                y += 28
+            undo = pygame.Rect(px + w - 90, py + h - 36, 74, 24)
+            pygame.draw.rect(self.screen, (60,60,70), undo)
+            pygame.draw.rect(self.screen, (120,120,140), undo, 2)
+            uts = self.font.render('撤回', True, self.colors['text'])
+            self.screen.blit(uts, (undo.x + 18, undo.y + 2))
+            self.panel_rects['undo'] = undo
 
     def compute_visibility(self, gamestate, side):
         vis = set()
