@@ -170,3 +170,104 @@
   - `Scout/Infantry/Archer` 分兵种策略，组合为 `CompositePolicy`
   - 入口选用：`rts_pygame.py:run_mvc()` 设置 `CompositePolicy` 为当前策略
 
+## 模式总览（EVE 与 PVE）
+
+- 菜单与入口
+  - 一级菜单：`EVE 电脑对战 / PVE 人机对战 / PVP（占位） / 地图编辑器 / 调试工具 / 退出` `views/pygame_view.py:18-26`
+  - EVE/PVE 二级菜单：`随机地图 / 选择地图 / 返回主菜单` `views/pygame_view.py:28-34`
+  - 入口控制与状态机：`controllers/game_controller.py:61-121,146-184`
+
+- EVE（电脑对战）
+  - 双方均由 AI 控制：组合兵种策略 `CompositePolicy` `ai/unit_policies.py:1-70`
+  - 运行模式：连续/逐步均支持；右上控件控制暂停、倍速、逐步/单步 `renderer/pygame_renderer.py:239-292`
+  - 地图来源：随机或选择 `maps/*.json`；结束界面支持重开与回主菜单 `controllers/game_controller.py:311-320`
+
+- PVE（人机对战）
+  - 阵营选择：进入对局前选择红队/蓝队；视野锁定到所选阵营 `controllers/game_controller.py:185-204,355-361`
+  - 严格逐帧回合制：操作阶段→结算阶段→下一回合 `simulation/loop.py:62-104`
+    - 操作阶段：玩家进行招募与单位指令，AI 同时给出行动
+    - 结算阶段顺序：生成→攻击→移动，回合数仅在结算后递增
+  - 视野与到达约束：
+    - 移动/预览仅允许到“可见或已探索”的可走格；基地视作障碍 `simulation/loop.py:26-39,100-106`
+  - 玩家招募（基地面板）：
+    - 面板内容：当回合点数、三兵种属性与消耗、撤回 `renderer/pygame_renderer.py:343-381`
+    - 交互：点击基地开/关面板，选兵种后高亮 1 格可放置空地；点击加入队列并扣点数；撤回恢复点数 `controllers/game_controller.py:256-289,415-431`
+  - 玩家单位操作（单位面板）：
+    - 面板内容：血量条、移动/攻击模式切换、可攻击目标列表与撤回 `renderer/pygame_renderer.py:382-421`
+    - 移动：显示本回合可达高亮；点击生成实际可走 BFS 路径预览并截断到 `spd` 步 `controllers/game_controller.py:430-476`
+    - 攻击：目标高亮与箭头预览，设置指令 `renderer/pygame_renderer.py:324-342`
+  - 预览与一致性：
+    - 招募预览：半透明单位叠加在放置格 `renderer/pygame_renderer.py:309-315`
+    - 移动预览：渲染 BFS 路径；结算按该路径推进，避免“预览与实际不同” `renderer/pygame_renderer.py:312-329, simulation/loop.py:94-129`
+    - 结束按钮点击后自动清空面板与预览 `controllers/game_controller.py:246-254`
+  - 冲突仲裁：
+    - 同格竞争：按 `spd`→`hp`→`atk`→对象 id 排序选赢家；每步仅推进一格并释放原占用 `simulation/loop.py:110-129`
+    - 攻击批量伤害：先汇总再统一应用，支持互相击杀 `simulation/loop.py:73-85`
+
+- 辅助与调试
+  - 视野与路径调试器：主菜单“调试工具”，支持放置地形/单位、LOS 与 BFS 路径检查 `tools/vision_path_tester.py:1-280`，入口 `controllers/game_controller.py:124-137`
+
+## 电脑策略总览
+
+- 策略层次
+  - 单位行为策略：按兵种分派 `Scout/Infantry/Archer`，组合为 `CompositePolicy` `ai/unit_policies.py:58-69`
+  - 全局两阶段策略：`TwoPhasePolicy`（侦察→总攻，记录敌方基地）`ai/policy.py:34-72`
+  - 简单策略：`SimplePolicy`（最近目标优先，射程内攻击）`ai/policy.py:12-33`
+
+- 决策输入
+  - 视野：六边形 LOS，山阻挡、河不阻挡 `renderer/pygame_renderer.py:422-451`
+  - 状态：单位/基地位置、射程 `rng`、移动点数 `spd`、六边形距离 `hex_distance`
+  - 敌方基地记忆：一旦在视野内看到敌方基地，写入 `known_enemy_base[side]` `core/state.py:82-83`
+
+- 行为规则
+  - 侦察兵（ScoutPolicy）：优先探索远点；看到敌方基地后向基地推进并在射程内攻击 `ai/unit_policies.py:7-26`
+  - 步兵（InfantryPolicy）：选择最近目标，近战推进；射程内攻击，否则靠近 `ai/unit_policies.py:28-41`
+  - 弓箭手（ArcherPolicy）：选择最近目标，优先在射程边缘攻击并保持距离 `ai/unit_policies.py:43-56`
+  - 两阶段策略（TwoPhasePolicy）：视野内记录基地；有已知基地则向基地推进；否则选择最近可见目标或远点探索 `ai/policy.py:38-72`
+  - 默认行为（无目标）：`wander` 随机游走
+
+- 生成策略
+  - 点数制：每回合 `BASE_BUILD_POINTS=6`，不累计 `core/balance.py:1`
+  - 随机策略：`RandomSpawnStrategy` 按点数随机填充兵种列表，溢出忽略 `ai/spawn_strategy.py:1-26`
+
+- 结算流程（对 AI 同样适用）
+  - 顺序：生成 → 攻击（批量伤害）→ 移动（两阶段仲裁）
+  - 攻击：汇总伤害并统一应用，支持互相击杀 `simulation/loop.py:73-85`
+  - 移动：每步一格，意图收集后按 `spd→hp→atk→id` 仲裁同格竞争；基于“已知可走”格，禁止进入基地格 `simulation/loop.py:108-129,26-39,100-106`
+
+- 约束与边界
+  - 移动/生成仅在可走且未占用格执行；玩家侧与电脑侧一致使用占用集合与基地障碍判定
+  - 视野与探索：AI 决策依赖当前视野与已探索信息；不可见的未知区域不参与可达判断
+ 
+## 文件索引（逐文件说明）
+- 顶层
+  - `rts_pygame.py`：应用入口，创建 `PygameRenderer`/`PygameView`/`GameController` 并运行
+- core/
+  - `core/map.py`：地形常量与地图类（宽高与网格），随机生成与可走判断
+  - `core/entities.py`：`Base`（含每回合点数/增益）与 `Unit` 属性模型
+  - `core/state.py`：全局状态、单位列表/占用集、序列化/反序列化、探索与基地记录
+  - `core/balance.py`：造兵点数与兵种属性/成本配置
+- simulation/
+  - `simulation/loop.py`：回合引擎；阶段（操作/结算）、预览路径、攻击批量伤害、移动仲裁与同格竞争
+- ai/
+  - `ai/policy.py`：`Action` 类型；`DecisionPolicy` 抽象；`SimplePolicy` 与 `TwoPhasePolicy`
+  - `ai/unit_policies.py`：分兵种策略（Scout/Infantry/Archer）与 `CompositePolicy`
+  - `ai/spawn_strategy.py`：`ISpawnStrategy` 与 `RandomSpawnStrategy`
+- renderer/
+  - `renderer/base.py`：渲染接口定义
+  - `renderer/pygame_renderer.py`：六边形绘制、HUD/控件、预览叠加、LOS 计算
+  - `renderer/char.py`：终端字符渲染（用于非图形环境）
+- controllers/
+  - `controllers/game_controller.py`：菜单/模式/输入事件；PVE 面板交互（招募/移动/攻击/撤回）；预览数据注入
+- views/
+  - `views/pygame_view.py`：主菜单/二级菜单与结算界面按钮、悬浮/选中态视觉反馈
+- utils/
+  - `utils/common.py`：六边形工具集（邻居/距离/线段/坐标转换）
+- tools/
+  - `tools/vision_path_tester.py`：独立调试器，放置障碍/单位/目标，检查 LOS 与 BFS 路径并可保存场景
+- web/
+  - `web/server.py`：HTTP 服务（状态与控制接口）
+  - `web/app.js`：Canvas 端六边形渲染与简单 UI
+- 其他
+  - `map_editor.py`：地图编辑器（地形/镜像放置、命名保存、基地摆放）
+

@@ -36,7 +36,7 @@ class PygameView:
         self.menu_title = '主菜单'
         self.menu_buttons = [
             Button((w//2-100, 170, 200, 36), 'EVE 电脑对战', 'mode_eve'),
-            Button((w//2-100, 216, 200, 36), 'PVE 玩家对战', 'mode_pve'),
+            Button((w//2-100, 216, 200, 36), 'PVE 人机对战', 'mode_pve'),
             Button((w//2-100, 262, 200, 36), 'PVP 网络对战', 'mode_pvp'),
             Button((w//2-100, 308, 200, 36), '地图编辑器', 'map_editor'),
             Button((w//2-100, 354, 200, 36), '调试工具', 'debug_tool'),
@@ -52,7 +52,7 @@ class PygameView:
         ]
 
     def init_pve_buttons(self, w):
-        self.menu_title = 'PVE 玩家对战'
+        self.menu_title = 'PVE 人机对战'
         self.menu_buttons = [
             Button((w//2-100, 190, 200, 36), '随机地图', 'pve_random'),
             Button((w//2-100, 236, 200, 36), '选择地图', 'pve_select'),
