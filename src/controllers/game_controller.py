@@ -12,7 +12,7 @@ from src.network.server import GameServer
 from src.network.client import GameClient
 
 from src.views.pygame_view import Button
-from src.utils.common import hex_neighbors, hex_distance
+from src.utils.common import hex_neighbors, hex_distance, get_local_ip
 from src.core.balance import UNIT_STATS, UNIT_COSTS
 from src.ai.policy import Action
 from src.core.state import GameState
@@ -579,7 +579,7 @@ class GameController:
         configs = get_pvp_connect_buttons(self.w)
         self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
         self.view.menu_title = '创建房间'
-        self.input_ip = '0.0.0.0' # Listen on all
+        self.input_ip = get_local_ip() # Show LAN IP so others can join
         self.connection_status = '点击连接启动服务器...'
 
     def _start_pvp_connection(self):

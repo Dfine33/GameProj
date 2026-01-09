@@ -161,9 +161,21 @@ class GameState:
         return None
 
     def place_bases(self):
-        a = self.find_open((1, 1))
-        b = self.find_open((self.map.width-2, self.map.height-2))
-        return Base('A', a[0], a[1], 500, build_points_per_turn=BASE_BUILD_POINTS), Base('B', b[0], b[1], 500, build_points_per_turn=BASE_BUILD_POINTS)
+        # Place bases at diagonal corners for Central Symmetry
+        
+        # Base A (Top-Left)
+        ax = 3
+        ay = 3
+        
+        # Base B (Bottom-Right)
+        bx = self.map.width - 4
+        by = self.map.height - 4
+        
+        # Ensure exact spots are clear (though map gen should handle it)
+        if self.map.in_bounds(ax, ay): self.map.grid[ay][ax] = PLAIN
+        if self.map.in_bounds(bx, by): self.map.grid[by][bx] = PLAIN
+        
+        return Base('A', ax, ay, 500, build_points_per_turn=BASE_BUILD_POINTS), Base('B', bx, by, 500, build_points_per_turn=BASE_BUILD_POINTS)
 
     def spawn_unit(self, team, pos, kind):
         st = UNIT_STATS[kind]
