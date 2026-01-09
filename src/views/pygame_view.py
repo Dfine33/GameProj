@@ -12,11 +12,19 @@ class Button:
         base = (40, 40, 48)
         hilite = (70, 70, 90)
         sel = (90, 90, 110)
+        
+        # Override label for special actions to reflect state
+        display_label = self.label
+        if self.action == 'pvp_cancel_turn':
+             base = (60, 30, 30)
+             hilite = (90, 40, 40)
+             display_label = "取消准备"
+             
         color = sel if self.selected else (hilite if self.hover else base)
         pygame.draw.rect(screen, color, self.rect, border_radius=4)
         border_col = (240,220,80) if self.selected else (110,110,130)
         pygame.draw.rect(screen, border_col, self.rect, 3 if self.selected else 2, border_radius=4)
-        surf = font.render(self.label, True, (230,230,230))
+        surf = font.render(display_label, True, (230,230,230))
         srect = surf.get_rect(center=self.rect.center)
         screen.blit(surf, srect.topleft)
 
@@ -88,14 +96,27 @@ class PygameView:
         self.draw_center_text(renderer.screen, renderer.title_font, self.menu_title, 120, (240,240,240))
         for b in self.menu_buttons:
             b.draw(renderer.screen, renderer.font)
-        pygame.display.flip()
+
+        # Draw PVP Error Overlay
+        err_msg = getattr(self, 'pvp_error', None)
+        if err_msg:
+            w, h = renderer.screen.get_size()
+            s = pygame.Surface((w, 60))
+            s.set_alpha(200)
+            s.fill((100, 0, 0))
+            renderer.screen.blit(s, (0, h//2 - 30))
+            etext = renderer.title_font.render(err_msg, True, (255, 255, 255))
+            erect = etext.get_rect(center=(w//2, h//2))
+            renderer.screen.blit(etext, erect)
+
+        # pygame.display.flip() - Removed to allow additional drawing before flip
 
     def draw_select(self, renderer, buttons):
         renderer.screen.fill((20,20,24))
         self.draw_center_text(renderer.screen, renderer.title_font, '选择地图', 120, (240,240,240))
         for b in buttons:
             b.draw(renderer.screen, renderer.font)
-        pygame.display.flip()
+        # pygame.display.flip() - Removed for consistency, though select usually final
 
     def draw_gameover(self, renderer, state):
         renderer.screen.fill((12,12,16))
@@ -105,7 +126,7 @@ class PygameView:
         self.draw_center_text(renderer.screen, renderer.font, f'Tick {state.tick}  单位 A {a_cnt} / B {b_cnt}', 180, (200,200,200))
         for b in self.gameover_buttons:
             b.draw(renderer.screen, renderer.font)
-        pygame.display.flip()
+        # pygame.display.flip()
 
     def update_hover(self, renderer, mx, my, select_buttons):
         for b in self.menu_buttons:

@@ -1,10 +1,15 @@
 import os
 import json
 import pygame
+import threading
 from src.eve.config import get_eve_menu_buttons
 from src.eve.game import start_eve_game
 from src.pve.config import get_pve_menu_buttons, get_team_select_buttons
 from src.pve.game import start_pve_game
+from src.pvp.config import get_pvp_menu_buttons, get_pvp_connect_buttons, get_pvp_host_map_buttons, get_pvp_team_select_buttons
+from src.pvp.game import PVPGameLoop
+from src.network.server import GameServer
+from src.network.client import GameClient
 
 from src.views.pygame_view import Button
 from src.utils.common import hex_neighbors, hex_distance
@@ -43,6 +48,14 @@ class GameController:
         self.ui_mode = None
         self.selected_base = None
         self.selected_unit = None
+        
+        # PVP state
+        self.server = None
+        self.client = None
+        self.input_ip = '127.0.0.1'
+        self.is_host = False
+        self.connection_status = ''
+
 
     def reset_runtime(self):
         self.feed_items = []
@@ -102,8 +115,26 @@ class GameController:
                     self.renderer.step_mode = self.step_mode
                 elif event.key == pygame.K_n or uni == 'n':
                     self.do_step = True
-                # PVE 仅显示玩家阵营视野，禁用 1/2/3 切换
-                if self.mode_menu_state != 'MENU_PVE':
+            elif self.state_view == 'PVP_HOST_MAP':
+                # Handled in main draw loop
+                pass
+            elif self.state_view == 'PVP_TEAM_SELECT':
+                # Handled in main draw loop
+                pass
+            elif self.state_view == 'PVP_CONNECT':
+                if event.key == pygame.K_BACKSPACE:
+                    self.input_ip = self.input_ip[:-1]
+                elif event.key == pygame.K_RETURN:
+                    self._start_pvp_connection()
+                else:
+                    # Allow editing in both modes if needed, but mostly for Join
+                    # Host usually binds to 0.0.0.0, but maybe user wants to specific interface?
+                    # Let's allow editing for Join mode, and maybe Host mode too but Host defaults to 0.0.0.0
+                    if not self.is_host or self.input_ip != '0.0.0.0': 
+                         if len(self.input_ip) < 15 and (uni.isdigit() or uni == '.'):
+                            self.input_ip += uni
+            # PVE 仅显示玩家阵营视野，禁用 1/2/3 切换
+            if self.mode_menu_state != 'MENU_PVE':
                     if event.key == pygame.K_1:
                         self.renderer.view_mode = 'A'
                     elif event.key == pygame.K_2:
@@ -146,6 +177,16 @@ class GameController:
                 configs = get_pve_menu_buttons(self.w)
                 self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
                 self.view.menu_title = 'PVE 人机对战'
+            elif self.state_view == 'PVP_CONNECT':
+                 self.view.draw_menu(self.renderer)
+                 # Draw IP input
+                 font = self.renderer.font
+                 label = font.render(f"IP: {self.input_ip}", True, (255, 255, 255))
+                 status = font.render(self.connection_status, True, (200, 200, 200))
+                 w, h = self.renderer.screen.get_size()
+                 self.renderer.screen.blit(label, (w//2 - label.get_width()//2, 140))
+                 self.renderer.screen.blit(status, (w//2 - status.get_width()//2, 380))
+                 pygame.display.flip()
             elif self.state_view == 'TEAM_SELECT':
                 configs = get_team_select_buttons(self.w)
                 self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
@@ -172,8 +213,11 @@ class GameController:
                             self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
                             self.view.menu_title = 'PVE 人机对战'
                         elif b.action == 'mode_pvp':
-                            w, h = self.renderer.screen.get_size()
-                            self.view.push_feed(self.renderer, 'PVP 待拓展', w - 10, 6)
+                            self.state_view = 'MENU_PVP'
+                            self.mode_menu_state = 'MENU_PVP'
+                            configs = get_pvp_menu_buttons(self.w)
+                            self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                            self.view.menu_title = 'PVP 网络对战'
                         elif b.action == 'map_editor':
                             try:
                                 import src.map_editor as map_editor
@@ -233,6 +277,75 @@ class GameController:
                         elif b.action == 'back_root':
                             self.state_view = 'MENU_ROOT'
                             self.view.init_menu_buttons(self.w)
+            elif self.state_view == 'MENU_PVP':
+                for b in self.view.menu_buttons:
+                    if b.rect.collidepoint(event.pos):
+                        if b.action == 'pvp_host':
+                            self.is_host = True
+                            self.state_view = 'PVP_HOST_MAP'
+                            configs = get_pvp_host_map_buttons(self.w)
+                            self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                            self.view.menu_title = '选择地图 (主机)'
+                        elif b.action == 'pvp_join':
+                            self.is_host = False
+                            self.state_view = 'PVP_CONNECT'
+                            configs = get_pvp_connect_buttons(self.w)
+                            self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                            self.view.menu_title = '加入房间'
+                            # self.input_ip = '127.0.0.1' # Default target - DO NOT RESET IF USER TYPED
+                            if self.input_ip == '0.0.0.0':
+                                self.input_ip = '127.0.0.1'
+                            self.connection_status = '输入IP后点击连接...'
+                        elif b.action == 'back_root':
+                            self.state_view = 'MENU_ROOT'
+                            self.view.init_menu_buttons(self.w)
+            elif self.state_view == 'PVP_HOST_MAP':
+                for b in self.view.menu_buttons:
+                    if b.rect.collidepoint(event.pos):
+                        if b.action == 'pvp_map_random':
+                            self.pending_start_mode = 'random'
+                            self.pending_map_path = None
+                            self.state_view = 'PVP_TEAM_SELECT'
+                            configs = get_pvp_team_select_buttons(self.w)
+                            self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                            self.view.menu_title = '选择队伍 (主机)'
+                        elif b.action == 'pvp_map_select':
+                            maps_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'maps')
+                            os.makedirs(maps_dir, exist_ok=True)
+                            files = [f for f in os.listdir(maps_dir) if f.lower().endswith('.json')]
+                            self.map_select = files
+                            self.select_buttons = self.view.make_select_buttons(self.w, self.map_select)
+                            self.prev_menu_state = 'MENU_PVP'
+                            self.state_view = 'MAP_SELECT'
+                        elif b.action == 'pvp_back_to_menu':
+                            self.state_view = 'MENU_PVP'
+                            configs = get_pvp_menu_buttons(self.w)
+                            self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                            self.view.menu_title = 'PVP 网络对战'
+            elif self.state_view == 'PVP_TEAM_SELECT':
+                for b in self.view.menu_buttons:
+                    if b.rect.collidepoint(event.pos):
+                        if b.action == 'pvp_team_a':
+                            self.player_team = 'A'
+                            self._start_pvp_host_final()
+                        elif b.action == 'pvp_team_b':
+                            self.player_team = 'B'
+                            self._start_pvp_host_final()
+                        elif b.action == 'pvp_back_to_map':
+                            self.state_view = 'PVP_HOST_MAP'
+                            configs = get_pvp_host_map_buttons(self.w)
+                            self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                            self.view.menu_title = '选择地图 (主机)'
+            elif self.state_view == 'PVP_CONNECT':
+                 for b in self.view.menu_buttons:
+                    if b.rect.collidepoint(event.pos):
+                        if b.action == 'pvp_connect':
+                            self._start_pvp_connection()
+                        elif b.action == 'pvp_back':
+                            self.state_view = 'MENU_PVP'
+                            configs = get_pvp_menu_buttons(self.w)
+                            self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                            self.view.menu_title = 'PVP 网络对战'
             elif self.state_view == 'TEAM_SELECT':
                 for b in self.view.menu_buttons:
                     if b.rect.collidepoint(event.pos):
@@ -272,6 +385,13 @@ class GameController:
                                 configs = get_team_select_buttons(self.w)
                                 self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
                                 self.view.menu_title = '选择队伍'
+                            elif getattr(self, 'prev_menu_state', None) == 'MENU_PVP':
+                                self.pending_start_mode = 'file'
+                                self.pending_map_path = os.path.join(maps_dir, name)
+                                self.state_view = 'PVP_TEAM_SELECT'
+                                configs = get_pvp_team_select_buttons(self.w)
+                                self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+                                self.view.menu_title = '选择队伍 (主机)'
                             else:
                                 self.loop = start_eve_game(self.renderer, initial_state=st)
                                 self.renderer.initialize(self.loop.state)
@@ -303,7 +423,22 @@ class GameController:
                 elif r.get('step_once') and r['step_once'].collidepoint(event.pos):
                     self.do_step = True
                 elif r.get('end_turn') and r['end_turn'].collidepoint(event.pos):
-                    if self.mode_menu_state == 'MENU_PVE':
+                    if self.mode_menu_state == 'MENU_PVP':
+                        # Commit turn actions to server
+                        if isinstance(self.loop, PVPGameLoop):
+                            if self.loop.waiting_for_server:
+                                # If already waiting, this button acts as Cancel
+                                self.loop.cancel_turn()
+                            else:
+                                self.loop.commit_turn()
+                                self.ui_mode = None
+                                self.selected_base = None
+                                self.selected_unit = None
+                                self.renderer.ui_highlights = set()
+                                self.renderer.path_preview = []
+                                self.renderer.panel = None
+                                self.renderer.preview_paths = {}
+                    elif self.mode_menu_state == 'MENU_PVE':
                         self.loop.human_ready = True
                         self.ui_mode = None
                         self.selected_base = None
@@ -439,14 +574,175 @@ class GameController:
         self.step_mode = True
         self.renderer.step_mode = True
 
+    def _start_pvp_host_final(self):
+        self.state_view = 'PVP_CONNECT'
+        configs = get_pvp_connect_buttons(self.w)
+        self.view.menu_buttons = [Button(c.rect, c.label, c.action) for c in configs]
+        self.view.menu_title = '创建房间'
+        self.input_ip = '0.0.0.0' # Listen on all
+        self.connection_status = '点击连接启动服务器...'
+
+    def _start_pvp_connection(self):
+        self.connection_status = '正在连接...'
+        # Draw immediately to show status
+        self.view.draw_menu(self.renderer)
+        font = self.renderer.font
+        status = font.render(self.connection_status, True, (200, 200, 200))
+        w, h = self.renderer.screen.get_size()
+        self.renderer.screen.blit(status, (w//2 - status.get_width()//2, 380))
+        pygame.display.flip()
+        
+        if self.is_host:
+            # Start Server
+            try:
+                # Need to pass map config to server
+                map_config = {}
+                # 为了保证PVP地图绝对一致，主机先生成地图并序列化发送
+                # Create a temporary state to generate the map
+                temp_seed = int(pygame.time.get_ticks())
+                import random
+                random.seed(temp_seed)
+                
+                if self.pending_start_mode == 'random':
+                    # 生成随机地图并序列化
+                    temp_state = GameState() 
+                    map_data = temp_state.serialize()
+                    # 只传输地图数据部分，减少包大小（其实GameState.deserialize主要看map）
+                    # 但为了兼容现有逻辑，我们发送完整序列化数据作为 'data'
+                    map_config = {'mode': 'file', 'data': map_data}
+                elif self.pending_start_mode == 'file' and self.pending_map_path:
+                    try:
+                        with open(self.pending_map_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            map_config = {'mode': 'file', 'data': data}
+                    except:
+                         map_config = {'mode': 'random'}
+                
+                self.server = GameServer(host='0.0.0.0', port=5000)
+                # Set map config
+                self.server.set_game_config(map_config, self.player_team)
+                self.server.start()
+                self.connection_status = '服务器已启动，等待对手...'
+                
+                # Host also connects as a client
+                self.client = GameClient()
+                if self.client.connect('127.0.0.1', 5000):
+                    self.connection_status = '已连接到本地服务器，等待对手...'
+                    self._wait_for_pvp_start()
+                else:
+                    self.connection_status = '连接本地服务器失败'
+            except Exception as e:
+                self.connection_status = f'启动失败: {e}'
+        else:
+            # Join as Client
+            self.client = GameClient()
+            if self.client.connect(self.input_ip, 5000):
+                self.connection_status = '已连接，等待游戏开始...'
+                self._wait_for_pvp_start()
+            else:
+                self.connection_status = f'连接 {self.input_ip} 失败'
+
+    def _wait_for_pvp_start(self):
+        # Start a thread to wait for start signal so UI doesn't freeze completely
+        # But for simplicity in this turn-based structure, we might poll in update loop
+        # For now, let's just switch to a polling state or simple loop
+        # We need to process client messages
+        t = threading.Thread(target=self._poll_pvp_start)
+        t.daemon = True
+        t.start()
+        
+    def _poll_pvp_start(self):
+        waiting = True
+        while waiting and self.renderer.running:
+            # Poll network events
+            if not self.client.connected:
+                self.connection_status = '连接断开'
+                break
+            
+            msgs = self.client.get_messages()
+            for msg in msgs:
+                if msg['type'] == 'start':
+                    # Game started!
+                    print(f"DEBUG: Client {self.player_team} received start msg")
+                    
+                    # Initialize PVP Loop with transmitted config
+                    config = msg.get('config', {})
+                    initial_state = None
+                    
+                    if config.get('mode') == 'random':
+                        # Use transmitted seed to ensure deterministic generation
+                        seed = config.get('seed')
+                        if seed is not None:
+                            import random
+                            random.seed(seed)
+                            # Re-import generate to ensure it uses the seeded random
+                            # Actually random module is global, so just seeding is enough 
+                            # IF generate uses random module.
+                            # Let's check state generation.
+                            # Assuming GameState init uses random.
+                            pass
+                        initial_state = GameState() # Will generate map
+                    elif config.get('mode') == 'file':
+                        # Use transmitted map data
+                        map_data = config.get('data')
+                        if map_data:
+                            initial_state = GameState.deserialize(map_data)
+                    
+                    # Fallback if initialization failed
+                    if not initial_state:
+                         initial_state = GameState()
+                         
+                    self.loop = PVPGameLoop(self.renderer, self.client, initial_state=initial_state)
+                    
+                    # Force main thread to switch state? 
+                    # We are in a thread, so set a flag or use an event
+                    self.pending_start_mode = 'pvp_start'
+                    waiting = False
+                    break
+                elif msg['type'] == 'assign':
+                    # Already handled in client, but good to know
+                    self.player_team = msg.get('team')
+                    pass
+            
+            # Reduce wait time to make it more responsive, but not too busy
+            pygame.time.wait(50)
+
     def tick_step(self):
+        # Check for PVP start signal from thread
+        if self.pending_start_mode == 'pvp_start':
+            self.pending_start_mode = None
+            self.renderer.initialize(self.loop.state)
+            self.state_view = 'RUNNING'
+            self.mode_menu_state = 'MENU_PVP'
+            self.loop.start_pvp_phase()
+            self.renderer.view_mode = self.loop.player_team
+            self.reset_runtime()
+            self.step_mode = True # PVP default step mode
+            self.renderer.step_mode = True
+            
         # 更新操作阶段的预览数据（每帧）
         self.renderer.preview_recruits = list(getattr(self.loop, 'player_recruits', []))
         self.renderer.preview_actions = dict(getattr(self.loop, 'player_actions', {}))
+        
+        # Inject waiting state to renderer for UI update
+        if isinstance(self.loop, PVPGameLoop):
+            self.renderer.is_waiting_pvp = self.loop.waiting_for_server
+            self.renderer.pvp_error = self.loop.error_message
+        else:
+            self.renderer.is_waiting_pvp = False
+            self.renderer.pvp_error = None
+            
         if self.step_mode:
-            if self.do_step:
+            # PVP模式下，如果正在等待服务器响应，强制执行step以轮询网络消息
+            force_step = False
+            if isinstance(self.loop, PVPGameLoop) and self.loop.waiting_for_server:
+                force_step = True
+            
+            if self.do_step or force_step:
+                # if force_step: print("DEBUG: Force stepping for PVP")
                 cont = self.loop.step(print_every=1)
-                self.do_step = False
+                if not force_step:
+                    self.do_step = False
             else:
                 self.renderer.render(self.loop.state, self.loop.state.tick)
                 cont = True
@@ -480,16 +776,33 @@ class GameController:
             self.view.update_hover(self.renderer, mx, my, self.select_buttons)
             for event in pygame.event.get():
                 self.handle_event(event)
-            if self.state_view in ('MENU_ROOT','MENU_EVE','MENU_PVE'):
+            if self.state_view in ('MENU_ROOT','MENU_EVE','MENU_PVE','MENU_PVP','PVP_HOST_MAP','PVP_TEAM_SELECT'):
                 self.view.draw_menu(self.renderer)
+                pygame.display.flip()
+            elif self.state_view == 'PVP_CONNECT':
+                 self.view.draw_menu(self.renderer)
+                 # Draw IP input
+                 font = self.renderer.font
+                 label = font.render(f"IP: {self.input_ip}", True, (255, 255, 255))
+                 status = font.render(self.connection_status, True, (200, 200, 200))
+                 w, h = self.renderer.screen.get_size()
+                 self.renderer.screen.blit(label, (w//2 - label.get_width()//2, 140))
+                 self.renderer.screen.blit(status, (w//2 - status.get_width()//2, 380))
+                 pygame.display.flip()
+                 # Check for start signal here too, as main loop might not update tick_step in menu modes
+                 if self.pending_start_mode == 'pvp_start':
+                     self.tick_step()
             elif self.state_view == 'TEAM_SELECT':
                 self.view.draw_menu(self.renderer)
+                pygame.display.flip()
             elif self.state_view == 'MAP_SELECT':
                 self.view.draw_select(self.renderer, self.select_buttons)
+                pygame.display.flip()
             elif self.state_view == 'RUNNING':
                 self.tick_step()
             elif self.state_view == 'GAMEOVER':
                 self.view.draw_gameover(self.renderer, self.loop.state)
+                pygame.display.flip()
             self.view.update_feed(self.renderer)
             self.renderer.clock.tick(self.renderer.fps)
 

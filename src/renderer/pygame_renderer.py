@@ -334,10 +334,37 @@ class PygameRenderer(Renderer):
         self.screen.blit(psurf, (sp_plus.x + 6, sp_plus.y + 2))
         sval = self.font.render(f'{self.speed:.2f}x', True, self.colors['text'])
         self.screen.blit(sval, (right - 58, ctrl_y2 + 2))
-        pygame.draw.rect(self.screen, (60,60,70), end_turn)
+        
+        # Determine "End Turn" button appearance based on waiting state
+        is_waiting = getattr(self, 'is_waiting_pvp', False)
+        
+        et_color = (60,60,70)
+        et_text = '结束'
+        if is_waiting:
+             et_color = (80, 40, 40)
+             et_text = '取消'
+        
+        pygame.draw.rect(self.screen, et_color, end_turn)
         pygame.draw.rect(self.screen, (120,120,140), end_turn, 2)
-        etxt = self.font.render('结束', True, self.colors['text'])
+        etxt = self.font.render(et_text, True, self.colors['text'])
         self.screen.blit(etxt, (end_turn.x + 8, end_turn.y + 2))
+        
+        if is_waiting:
+            # Draw waiting overlay
+            wait_text = self.title_font.render("等待对手...", True, (255, 255, 255))
+            wrect = wait_text.get_rect(center=(w//2, 80))
+            self.screen.blit(wait_text, wrect)
+
+        # Draw PVP Error Overlay
+        err_msg = getattr(self, 'pvp_error', None)
+        if err_msg:
+            s = pygame.Surface((w, 60))
+            s.set_alpha(200)
+            s.fill((100, 0, 0))
+            self.screen.blit(s, (0, self.screen.get_height()//2 - 30))
+            etext = self.title_font.render(err_msg, True, (255, 255, 255))
+            erect = etext.get_rect(center=(w//2, self.screen.get_height()//2))
+            self.screen.blit(etext, erect)
 
     def render_overlays(self, gamestate):
         hl = getattr(self, 'ui_highlights', set())

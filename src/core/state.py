@@ -1,4 +1,6 @@
 import random
+import hashlib
+import json
 from core.entities import Base, Unit
 from core.map import Map, generate
 from core.map import PLAIN
@@ -44,10 +46,28 @@ class GameState:
             ],
             'known_enemy_base': self.known_enemy_base,
             'explored': {
-                'A': [(x, y) for (x, y) in self.explored['A']],
-                'B': [(x, y) for (x, y) in self.explored['B']]
+                'A': sorted(list(self.explored['A'])),
+                'B': sorted(list(self.explored['B']))
             }
         }
+
+    def get_checksum(self):
+        # Serialize state to a stable string and hash it
+        data = self.serialize()
+        
+        # Exclude client-specific view data from checksum to prevent desync
+        # The physical state (Units, Map, Bases) must be identical.
+        # 'explored' and 'known_enemy_base' might differ if they track local player's view only,
+        # or if the simulation doesn't perfectly sync them. 
+        # For P2P lockstep, we assume simulation logic (which uses _vis_cache) is deterministic based on units/map.
+        if 'explored' in data:
+            del data['explored']
+        if 'known_enemy_base' in data:
+            del data['known_enemy_base']
+            
+        # Ensure json dump is deterministic
+        s = json.dumps(data, sort_keys=True)
+        return hashlib.md5(s.encode('utf-8')).hexdigest()
 
     @staticmethod
     def deserialize(data):
